@@ -16,9 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.plc4x.java.profinet.dcp.field;
+package org.apache.plc4x.java.profinet.dcp.protocol.conversation;
 
-import org.apache.plc4x.java.api.model.PlcField;
+import java.util.concurrent.CompletableFuture;
 
-public abstract class ProfinetDcpField implements PlcField {
+/**
+ * Definition of conversation which involves one or more request or request/response packets on the wire.
+ *
+ * @param <T> Type of callback filled by this conversation.
+ */
+public interface Conversation<T> {
+
+    void execute(CompletableFuture<T> callback);
+
 }

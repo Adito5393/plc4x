@@ -23,12 +23,18 @@ import org.apache.plc4x.java.api.model.PlcField;
 import org.apache.plc4x.java.spi.connection.PlcFieldHandler;
 
 /**
- * TODO implement this.
+ *
  */
 public class ProfinetFieldHandler implements PlcFieldHandler {
 
     @Override
     public PlcField createField(String fieldQuery) throws PlcInvalidFieldException {
+        if (IdentifyRequestField.matches(fieldQuery)) {
+            return IdentifyRequestField.of(fieldQuery);
+        }
+        if (IdentifyResponseField.matches(fieldQuery)) {
+            return IdentifyResponseField.of(fieldQuery);
+        }
         return null;
     }
 

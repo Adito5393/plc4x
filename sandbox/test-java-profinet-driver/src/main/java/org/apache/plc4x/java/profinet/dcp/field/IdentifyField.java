@@ -20,5 +20,12 @@ package org.apache.plc4x.java.profinet.dcp.field;
 
 import org.apache.plc4x.java.api.model.PlcField;
 
-public abstract class ProfinetDcpField implements PlcField {
+/**
+ * Definition of constants and types related to identification requests or replies.
+ */
+public interface IdentifyField extends PlcField {
+
+    String BLOCK_PATTERN = "(IP|PROPERTIES|DHCP|CONTROL|ALL|,)+";
+    String BLOCK_ADDRESS_PATTERN = "(?:(?<block>" + BLOCK_PATTERN + "))?";
+
 }

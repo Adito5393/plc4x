@@ -27,34 +27,36 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import ch.qos.logback.classic.util.LogbackMDCAdapter;
-import org.apache.plc4x.java.api.messages.PlcSubscriptionEvent;
-import org.apache.plc4x.java.api.messages.PlcSubscriptionRequest;
-import org.apache.plc4x.java.api.messages.PlcSubscriptionResponse;
+import org.apache.plc4x.java.api.exceptions.PlcException;
+import org.apache.plc4x.java.api.messages.*;
 import org.apache.plc4x.java.api.model.PlcConsumerRegistration;
+import org.apache.plc4x.java.api.model.PlcField;
 import org.apache.plc4x.java.api.model.PlcSubscriptionHandle;
 import org.apache.plc4x.java.api.types.PlcResponseCode;
 import org.apache.plc4x.java.api.types.PlcSubscriptionType;
 import org.apache.plc4x.java.api.value.PlcValue;
 import org.apache.plc4x.java.profinet.dcp.configuration.ProfinetConfiguration;
+import org.apache.plc4x.java.profinet.dcp.field.IdentifyRequestField;
 import org.apache.plc4x.java.profinet.dcp.field.ProfinetDcpField;
+import org.apache.plc4x.java.profinet.dcp.protocol.conversation.IdentifyRequestConversation;
 import org.apache.plc4x.java.profinet.dcp.readwrite.*;
 import org.apache.plc4x.java.profinet.dcp.readwrite.types.*;
 import org.apache.plc4x.java.spi.ConversationContext;
 import org.apache.plc4x.java.spi.Plc4xProtocolBase;
 import org.apache.plc4x.java.spi.configuration.HasConfiguration;
+import org.apache.plc4x.java.spi.context.DriverContext;
 import org.apache.plc4x.java.spi.generation.ParseException;
 import org.apache.plc4x.java.spi.generation.ReadBuffer;
-import org.apache.plc4x.java.spi.messages.DefaultPlcSubscriptionEvent;
-import org.apache.plc4x.java.spi.messages.DefaultPlcSubscriptionRequest;
-import org.apache.plc4x.java.spi.messages.DefaultPlcSubscriptionResponse;
-import org.apache.plc4x.java.spi.messages.PlcSubscriber;
+import org.apache.plc4x.java.spi.messages.*;
 import org.apache.plc4x.java.spi.messages.utils.ResponseItem;
 import org.apache.plc4x.java.spi.model.DefaultPlcConsumerRegistration;
 import org.apache.plc4x.java.spi.model.DefaultPlcSubscriptionField;
 import org.apache.plc4x.java.spi.model.DefaultPlcSubscriptionHandle;
+import org.apache.plc4x.java.spi.transaction.RequestTransactionManager;
 import org.apache.plc4x.java.spi.values.PlcNull;
 import org.apache.plc4x.java.spi.values.PlcValues;
 import org.slf4j.Logger;
@@ -73,8 +75,9 @@ public class ProfinetDCPProtocolLogic extends Plc4xProtocolBase<BaseEthernetFram
     public static final Duration REQUEST_TIMEOUT = Duration.ofMillis(10000);
     private final Logger logger = LoggerFactory.getLogger(ProfinetDCPProtocolLogic.class);
     private Map<DefaultPlcConsumerRegistration, Consumer<PlcSubscriptionEvent>> consumers = new ConcurrentHashMap<>();
+    private RequestTransactionManager tm;
 
-    private AtomicInteger invokeId = new AtomicInteger(0);
+    private AtomicLong invokeId = new AtomicLong(0);
     private ProfinetConfiguration configuration;
 
     @Override
@@ -83,23 +86,62 @@ public class ProfinetDCPProtocolLogic extends Plc4xProtocolBase<BaseEthernetFram
     }
 
     @Override
-    public void onConnect(ConversationContext<BaseEthernetFrame> context) {
-        DCPServiceID serviceId = DCPServiceID.IDENTIFY;
-        DCPServiceType serviceType = DCPServiceType.REQUEST;
-        long xid = invokeId.incrementAndGet();
-        int responseDelay = 1000;
-        DCPBlock[] blocks = new DCPBlock[] { new AllSelector(DCPBlockOption.ALL_SELECTOR)};
+    public void setDriverContext(DriverContext driverContext) {
+        super.setDriverContext(driverContext);
 
-        DcpIdentRequestPDU requestPDU = new DcpIdentRequestPDU(serviceId, serviceType, xid, responseDelay, blocks);
-        ProfinetFrame profiFrame = new ProfinetFrame(FrameType.IDENTIFY_MULTICAST_REQUEST, requestPDU);
-        EthernetFrame ethernetFrame = new EthernetFrame(PROFINET_BROADCAST, configuration.getSender(), PN_DCP,
-            profiFrame);
-        /*TaggedFrame ethernetTaggedFrame = new TaggedFrame(PROFINET_BROADCAST, configuration.getSender(),
-            TypeLAN.VLAN.getValue(),profiFrame,(byte) 0,false,0,TypeLAN.PN_DCP.getValue());
-*/
-        // this is broadcast thus reply might come from multiple participants
-        context.sendToWire(ethernetFrame);
+        this.tm = new RequestTransactionManager();
+    }
+
+    @Override
+    public void onConnect(ConversationContext<BaseEthernetFrame> context) {
         context.fireConnected();
+    }
+
+    @Override
+    public CompletableFuture<PlcWriteResponse> write(PlcWriteRequest writeRequest) {
+        CompletableFuture<PlcWriteResponse> response = new CompletableFuture<>();
+        if (writeRequest.getFieldNames().size() != 1) {
+            response.completeExceptionally(new IllegalArgumentException("You can write only one field at the time"));
+            return response;
+        }
+
+        PlcField field = writeRequest.getFields().get(0);
+        if (!(field instanceof ProfinetDcpField)) {
+            response.completeExceptionally(new IllegalArgumentException("Only ProfinetDcpField instances are supported"));
+            return response;
+        }
+
+        if (field instanceof IdentifyRequestField) {
+            writeInternally((DefaultPlcWriteRequest) writeRequest, (IdentifyRequestField) field, response);
+            return response;
+        }
+
+        response.completeExceptionally(new IllegalArgumentException("Only IdentifyRequestField instances are supported"));
+        return response;
+    }
+
+    private void writeInternally(DefaultPlcWriteRequest writeRequest, IdentifyRequestField field, CompletableFuture<PlcWriteResponse> response) {
+        final RequestTransactionManager.RequestTransaction transaction = tm.startRequest();
+
+        String fieldName = writeRequest.getFieldNames().iterator().next();
+
+        CompletableFuture<PlcResponseCode> callback = new CompletableFuture<>();
+        callback.whenComplete((code, error) -> {
+            if (error != null) {
+                if (error instanceof PlcException) {
+                    response.complete(new DefaultPlcWriteResponse(writeRequest, Collections.singletonMap(fieldName, PlcResponseCode.REMOTE_ERROR)));
+                } else {
+                    response.complete(new DefaultPlcWriteResponse(writeRequest, Collections.singletonMap(fieldName, PlcResponseCode.INTERNAL_ERROR)));
+                }
+                transaction.endRequest();
+                return;
+            }
+            response.complete(new DefaultPlcWriteResponse(writeRequest, Collections.singletonMap(fieldName, code)));
+            transaction.endRequest();
+        });
+
+        IdentifyRequestConversation conversation = new IdentifyRequestConversation(this.context, configuration.getSender(), invokeId::incrementAndGet, field);
+        transaction.submit(() -> conversation.execute(callback));
     }
 
     @Override
@@ -111,11 +153,13 @@ public class ProfinetDCPProtocolLogic extends Plc4xProtocolBase<BaseEthernetFram
     protected void decode(ConversationContext<BaseEthernetFrame> context, BaseEthernetFrame msg) throws Exception {
         if (msg instanceof TaggedFrame) {
             TaggedFrame frame = (TaggedFrame) msg;
-            if (frame.getEthernetType() != PN_DCP) {
-                logger.trace("Discarding unwanted frame type {}", frame.getEthernetType());
+            if ((short) frame.getEthernetType() != PN_DCP) {
+                logger.trace("Discarding unwanted tagged frame with type 0x{}", Integer.toHexString(frame.getEthernetType()));
+                return;
             }
-        } else if (msg.getEtherType() != PN_DCP) {
-            logger.trace("Discarding unwanted frame type {}", msg.getEtherType());
+        } else if ((short) msg.getEtherType() != PN_DCP) {
+            logger.trace("Discarding unwanted ethernet frame type 0x{}", Integer.toHexString(msg.getEtherType()));
+            return;
         }
 
         ProfinetFrame profinetFrame = msg.getPayload();
@@ -129,22 +173,12 @@ public class ProfinetDCPProtocolLogic extends Plc4xProtocolBase<BaseEthernetFram
 
                 if (handle.matches(profinetFrame)) {
                     logger.trace("Dispatching frame {} to {}", profinetFrame, handle);
-
-                    ProfinetDcpField field = handle.getField();
-                    // todo map actual DCP fields to PlcValues ?
-                    PlcValue value = PlcValues.of(profinetFrame);
-                    DefaultPlcSubscriptionEvent event = new DefaultPlcSubscriptionEvent(
-                        Instant.now(),
-                        Collections.singletonMap(
-                            handle.getName(),
-                            new ResponseItem<>(PlcResponseCode.OK, value)
-                        )
-                    );
-                    consumer.accept(event);
+                    consumer.accept(handle.transform(profinetFrame));
                 }
             }
         }
 
+        /*
         if (profinetFrame.getFrameType() == FrameType.IDENTIFY_RESPONSE) {
             logger.info("Ident response from Profinet device:");
             if (profinetFrame.getFrame() instanceof DcpIdentResponsePDU) {
@@ -165,6 +199,7 @@ public class ProfinetDCPProtocolLogic extends Plc4xProtocolBase<BaseEthernetFram
                 logger.error("Unexpected ident response {}", profinetFrame.getFrame().getClass());
             }
         }
+        //*/
     }
 
     @Override

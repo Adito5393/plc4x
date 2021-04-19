@@ -53,7 +53,7 @@ public class RawSocketChannelFactory extends NettyChannelFactory implements HasC
 
     @Override
     public boolean isPassive() {
-        return true;
+        return false;
     }
 
     @Override

@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 import java.util.function.ToIntFunction;
 import org.apache.plc4x.java.api.value.PlcValueHandler;
 import org.apache.plc4x.java.profinet.dcp.configuration.ProfinetConfiguration;
+import org.apache.plc4x.java.profinet.dcp.context.ProfinetDCPDriverContext;
 import org.apache.plc4x.java.profinet.dcp.field.ProfinetFieldHandler;
 import org.apache.plc4x.java.profinet.dcp.protocol.ProfinetDCPProtocolLogic;
 import org.apache.plc4x.java.profinet.dcp.readwrite.BaseEthernetFrame;
@@ -77,10 +78,26 @@ public class ProfinetDCPPlcDriver extends GeneratedDriverBase<BaseEthernetFrame>
     }
 
     @Override
+    protected boolean canRead() {
+        return false; // wait for GET requests
+    }
+
+    @Override
+    protected boolean canWrite() {
+        return true;
+    }
+
+    @Override
+    protected boolean canSubscribe() {
+        return true;
+    }
+
+    @Override
     protected ProtocolStackConfigurer<BaseEthernetFrame> getStackConfigurer() {
         return SingleProtocolStackConfigurer.builder(BaseEthernetFrame.class, BaseEthernetFrameIO.class)
             .withProtocol(ProfinetDCPProtocolLogic.class)
             .withPacketSizeEstimator(ProfinetPacketEstimator.class)
+            .withDriverContext(ProfinetDCPDriverContext.class)
             //.withCorruptPacketRemover(CorruptEthernetFrameRemover.class)
             .build();
     }

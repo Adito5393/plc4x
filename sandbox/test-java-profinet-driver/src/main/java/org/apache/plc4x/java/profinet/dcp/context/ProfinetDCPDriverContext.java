@@ -16,9 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.plc4x.java.profinet.dcp.field;
+package org.apache.plc4x.java.profinet.dcp.context;
 
-import org.apache.plc4x.java.api.model.PlcField;
+import org.apache.plc4x.java.spi.context.DriverContext;
 
-public abstract class ProfinetDcpField implements PlcField {
+public class ProfinetDCPDriverContext implements DriverContext {
 }
