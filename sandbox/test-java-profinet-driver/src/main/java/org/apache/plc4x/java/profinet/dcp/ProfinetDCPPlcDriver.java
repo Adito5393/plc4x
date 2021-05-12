@@ -107,13 +107,11 @@ public class ProfinetDCPPlcDriver extends GeneratedDriverBase<BaseEthernetFrame>
         public int applyAsInt(ByteBuf buffer) {
             // When frame uses vlan tag then getShort(12) will return different type, actual ethernet type is shifted by
             // 4 bytes, after type & vlan tag information.
-            short protocol = buffer.getShort(12);
+            short protocol = buffer.getShort(buffer.readerIndex() + 12);
             int bufferSize = buffer.readableBytes();
             if (protocol == ProfinetDCPProtocolLogic.VLAN && bufferSize >= 26) {
                 return size(4, buffer);
-            }
-
-            if (protocol == ProfinetDCPProtocolLogic.PN_DCP && bufferSize >= 24) {
+            } else if (protocol == ProfinetDCPProtocolLogic.PN_DCP && bufferSize >= 24) {
                 return size(0, buffer);
             }
             LOG.debug("SIZE NOT CALLED; buffer.getShort(12)= {} and size= {}",protocol,bufferSize);
@@ -121,8 +119,8 @@ public class ProfinetDCPPlcDriver extends GeneratedDriverBase<BaseEthernetFrame>
         }
 
         private int size(int offset, ByteBuf buffer) {
-            int DCPDataLeng =  buffer.getUnsignedShort(24 + offset);
-            int val = DCPDataLeng + 26 + offset;
+            int dcpDataLength =  buffer.getUnsignedShort(buffer.readerIndex() + 24 + offset);
+            int val = dcpDataLength + 26 + offset;
             // profinet frames have fixed overhead of 26 bytes. First 16 is ethernet header, another 10 bytes are
             // needed to reach DCP block length field which gives an base for frame size calculation.
             /*if (buffer.getByte(16 + offset) == DCPServiceID.IDENTIFY.getValue() &&
@@ -132,8 +130,11 @@ public class ProfinetDCPPlcDriver extends GeneratedDriverBase<BaseEthernetFrame>
             }*/
             // Noticed that all pn_dcp packages (DCPServiceID.IDENTIFY + DCPServiceType.REQUEST) that have size
             // less than 60 will contain 0x00 padding to match min 60 length
-            if (val < 60) val=60;
-            LOG.info("DCPDataLen= {} and total len(+26)= {}",DCPDataLeng,val);
+            if (val < 60) {
+                val=60;
+            }
+            LOG.info("DCPDataLen= {} and total len(+26)= {} {}", dcpDataLength, val, buffer.readableBytes());
+            LOG.info("Buffer capacity= {}",buffer.capacity());
             return val;
         }
     }
